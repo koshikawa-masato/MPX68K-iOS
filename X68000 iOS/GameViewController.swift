@@ -21,6 +21,7 @@ final class GameViewController: UIViewController {
     var pendingURLs: [URL] = []
 
     /// 起動メディアが無い状態でディスクを受け取ったら、読み込み完了後にリセットして起動する。
+    private var idleTimerRefreshTimer: Timer?
     private var resetWhenBootMediaReady = false
     private var didPromptForBootMedia = false
 
@@ -1414,16 +1415,32 @@ final class GameViewController: UIViewController {
     func sceneWillResignActive() {
         // Re-enable the idle timer so the device can sleep normally
         // whenever this app is not the active foreground app.
+        idleTimerRefreshTimer?.invalidate()
+        idleTimerRefreshTimer = nil
         UIApplication.shared.isIdleTimerDisabled = false
         gameScene?.applicationWillResignActive()
     }
 
     func sceneDidBecomeActive() {
-        // Keep the screen awake while the emulator is in use: the system
-        // auto-lock must not blank the display mid-game. (The power button
-        // still sleeps the device; this only disables the idle timer.)
-        UIApplication.shared.isIdleTimerDisabled = true
         gameScene?.applicationDidBecomeActive()
+        // Keep the screen awake while sound is actually playing: the
+        // system auto-lock must not blank the display mid-game, but
+        // silent screens (menus, result screens) should sleep normally.
+        // (The power button still sleeps the device at any time.)
+        refreshIdleTimerSuppression()
+        idleTimerRefreshTimer?.invalidate()
+        idleTimerRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.refreshIdleTimerSuppression()
+        }
+    }
+
+    /// Suppress the idle (auto-lock) timer only while the emulation has
+    /// produced audible output within the grace period, so brief quiet
+    /// passages keep the suppression but sustained silence releases it.
+    private func refreshIdleTimerSuppression() {
+        let grace: TimeInterval = 30
+        let audible = gameScene?.secondsSinceAudible().map { $0 < grace } ?? false
+        UIApplication.shared.isIdleTimerDisabled = audible
     }
 
     func sceneWillEnterForeground() {

@@ -123,6 +123,7 @@ func outputCallback(_ data: UnsafeMutableRawPointer?, queue: AudioQueueRef, buff
         // Let the X68000 audio core fill the buffer directly
         X68000_AudioCallBack(mAudioDataPtr, UInt32(size))
         stream?.tapRenderedAudio(audioData, frameCount: Int(size))
+        stream?.noteRenderedAudio(mAudioDataPtr, frameCount: Int(size))
         
         buffer.pointee.mAudioDataByteSize = buffer.pointee.mAudioDataBytesCapacity
         AudioQueueEnqueueBuffer(queue, buffer, 0, nil)
@@ -152,6 +153,9 @@ class AudioStream {
     // timeline to know how much audio is still waiting to be played.
     private let latencyLock = NSLock()
     private var enqueuedFrames: Int64 = 0
+    // Monotonic time (system uptime) of the last rendered buffer whose peak
+    // reached the audible threshold; -1 while nothing audible has rendered.
+    private var lastAudibleUptime: TimeInterval = -1
     
 	var samplingrate = 22050
 	
@@ -202,6 +206,39 @@ class AudioStream {
         latencyLock.lock()
         enqueuedFrames += frames
         latencyLock.unlock()
+    }
+
+    /// Peak level at or above which a rendered buffer counts as audible
+    /// (about -48 dBFS; digital silence and DC residue stay below it).
+    private static let audiblePeakThreshold: Int16 = 128
+
+    /// Called from the output callback with each buffer the core rendered.
+    /// Records when the output last carried audible sound, so callers can
+    /// tell "music is playing" apart from "the machine is on but silent".
+    func noteRenderedAudio(_ data: UnsafeMutablePointer<Int16>, frameCount: Int) {
+        let sampleCount = frameCount * 2
+        var audible = false
+        for i in 0..<sampleCount {
+            let v = data[i]
+            if v >= Self.audiblePeakThreshold || v <= -Self.audiblePeakThreshold {
+                audible = true
+                break
+            }
+        }
+        guard audible else { return }
+        latencyLock.lock()
+        lastAudibleUptime = ProcessInfo.processInfo.systemUptime
+        latencyLock.unlock()
+    }
+
+    /// Seconds since the rendered output was last audible, or nil if no
+    /// audible buffer has been rendered yet. Callable from any thread.
+    func secondsSinceAudible() -> TimeInterval? {
+        latencyLock.lock()
+        let last = lastAudibleUptime
+        latencyLock.unlock()
+        guard last >= 0 else { return nil }
+        return ProcessInfo.processInfo.systemUptime - last
     }
 
     /// Seconds until OPM/ADPCM audio the emulation generates now is played: the core's

@@ -1325,6 +1325,11 @@ class GameScene: SKScene {
         // Resume audio when app becomes active
         audioStream?.play()
     }
+
+    /// Seconds since the audio output was last audible (see AudioStream).
+    func secondsSinceAudible() -> TimeInterval? {
+        audioStream?.secondsSinceAudible()
+    }
     
     override func sceneDidLoad() {
         debugLog("sceneDidLoad", category: .ui)
